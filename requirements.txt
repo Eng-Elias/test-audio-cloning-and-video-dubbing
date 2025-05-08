@@ -9,3 +9,6 @@ librosa
 vocos
 encodec
 safetensors
+openai-whisper
+moviepy
+ffmpeg-python
