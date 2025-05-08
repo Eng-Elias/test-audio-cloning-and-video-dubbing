@@ -33,7 +33,7 @@ def extract_audio(video_path, output_path=None):
     return output_path
 
 
-def transcribe_audio(audio_path, model_size="medium", task="transcribe", language=None):
+def transcribe_audio(audio_path, model_size="base", task="transcribe", language=None):
     """Transcribe audio using Whisper and return segments with timestamps."""
     print(f"Transcribing audio using Whisper {model_size} model...")
     

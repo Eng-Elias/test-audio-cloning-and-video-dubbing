@@ -2,3 +2,5 @@ venv/
 wsl_venv/
 command.txt
 
+# Output files
+output*.wav
