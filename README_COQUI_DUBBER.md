@@ -1,19 +1,21 @@
 # Coqui Video Dubber
 
-A powerful tool for dubbing videos into English using Whisper for transcription/translation and Coqui.ai TTS for high-quality speech synthesis.
+A powerful tool for dubbing videos into English using Whisper for transcription/translation, Demucs for music extraction, and Coqui.ai TTS for high-quality speech synthesis.
 
 ## Overview
 
-Coqui Video Dubber automates the process of dubbing videos into English by combining two state-of-the-art AI technologies:
+Coqui Video Dubber automates the process of dubbing videos into English by combining three state-of-the-art AI technologies:
 
 - **OpenAI Whisper**: For accurate transcription and translation of the original audio
+- **Facebook Demucs**: For high-quality music extraction and vocal removal
 - **Coqui.ai TTS**: For high-quality, natural-sounding speech synthesis
 
-This tool is optimized for NVIDIA GPUs, including the RTX 2060, providing efficient processing for both transcription and speech synthesis tasks.
+This tool is optimized for NVIDIA GPUs, including the RTX 2060, providing efficient processing for transcription, music separation, and speech synthesis tasks.
 
 ## Features
 
 - Extract audio from video files
+- Preserve original background music while replacing speech
 - Transcribe audio in multiple languages using Whisper
 - Translate non-English audio to English
 - Synthesize English speech with Coqui.ai TTS
@@ -83,13 +85,19 @@ python coqui_video_dubber.py --list_languages tts_models/multilingual/multi-data
 - `--keep_temp_files`: Keep temporary files (extracted audio, etc.)
 
 ### Whisper Options
-- `--whisper_model`: Whisper model size (choices: tiny, base, small, medium, large; default: base)
+- `--whisper_model`: Whisper model size (choices: tiny, base, small, medium, large; default: medium)
 
 ### TTS Options
 - `--tts_model`: Coqui TTS model to use (default: tts_models/en/ljspeech/tacotron2-DDC)
 - `--speaker`: Speaker ID for multi-speaker TTS models
 - `--language`: Language ID for multi-language TTS models
 - `--cpu`: Force CPU usage for TTS (default: use GPU if available)
+
+### Audio Mixing Options
+- `--speech_volume`: Volume level for speech in the final mix (0.0-1.5, default: 1.0)
+- `--music_volume`: Volume level for music in the final mix (0.0-1.5, default: 0.5)
+- `--no_noise_reduction`: Skip noise reduction preprocessing step
+- `--no_music_extraction`: Skip music extraction and preservation
 
 ### Information Commands
 - `--list_models`: List all available Coqui TTS models and exit
@@ -113,18 +121,35 @@ For your NVIDIA RTX 2060, we recommend the following configurations:
 ## How It Works
 
 1. **Audio Extraction**: The script extracts the audio track from the input video
-2. **Transcription/Translation**: Whisper processes the audio to generate timestamped text segments
-3. **Voice Synthesis**: Each text segment is synthesized using Coqui TTS
-4. **Audio Alignment**: Synthesized speech is aligned with the original timing
-5. **Video Merging**: The new audio track is merged with the original video
+2. **Music Extraction**: Demucs separates the background music from vocals
+3. **Audio Preprocessing**: Noise reduction is applied to improve transcription accuracy
+4. **Transcription/Translation**: Whisper processes the cleaned audio to generate timestamped text segments
+5. **Voice Synthesis**: Each text segment is synthesized using Coqui TTS
+6. **Audio Mixing**: Synthesized speech is mixed with the extracted background music
+7. **Audio Alignment**: The mixed audio is aligned with the original timing
+8. **Video Merging**: The new audio track is merged with the original video
 
 ## Tips for Best Results
 
 - Use a higher-quality Whisper model (`medium` or `large`) for better transcription accuracy
 - For multi-speaker TTS models, try different speakers to find the most suitable voice
 - The XTTS v2 model provides the most natural-sounding results but requires more GPU memory
-- For videos with background music, the original music will be lost in the dubbed version
+- Adjust `--speech_volume` and `--music_volume` to find the perfect balance for your video
+- For videos with complex audio, try different Demucs models by editing the script
 - If you encounter CUDA out-of-memory errors, try using a smaller model or the `--cpu` option
+- For videos without background music, use `--no_music_extraction` to speed up processing
+
+## Music Extraction Feature
+
+One of the key features of this tool is the ability to preserve the original background music while replacing the speech. This is accomplished using:
+
+- **Facebook's Demucs**: A state-of-the-art music source separation model that can separate audio into drums, bass, other instruments, and vocals
+- **Advanced Vocal Removal**: Multiple techniques to ensure no speech from the original video bleeds into the background music
+- **Dynamic Audio Mixing**: Intelligent mixing that adjusts music volume during speech pauses
+
+You can control this feature with:
+- `--music_volume`: Adjust how prominent the background music is (0.5 by default)
+- `--no_music_extraction`: Skip music extraction if the video doesn't have background music
 
 ## Troubleshooting
 
@@ -132,6 +157,9 @@ For your NVIDIA RTX 2060, we recommend the following configurations:
 - **Missing speakers/languages**: Use `--list_speakers` or `--list_languages` to see available options
 - **FFmpeg errors**: Ensure FFmpeg is properly installed and in your PATH
 - **Slow processing**: Ensure your GPU drivers are up to date for optimal performance
+- **Demucs errors**: If you encounter issues with Demucs, the script will automatically fall back to a simpler method
+- **Music too loud/quiet**: Use `--music_volume` to adjust the background music level
+- **Speech unclear**: Try increasing `--speech_volume` or decreasing `--music_volume`
 
 ## License
 
