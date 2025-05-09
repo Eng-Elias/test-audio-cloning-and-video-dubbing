@@ -1,73 +1,62 @@
-# MARS5-TTS CLI
+# MARS Audio and Video Tools
 
-A command-line interface for MARS5-TTS (Multilingual Adaptive Refined Synthesis), a text-to-speech system developed by Cambridge AI.
+This repository contains a collection of tools for audio synthesis and video dubbing using Camb.AI MARS5-TTS technology and other state-of-the-art AI models.
 
-## Overview
+## Available Tools
 
-MARS5-TTS allows you to synthesize speech that mimics a reference voice. The CLI provides an easy way to use this technology with your own reference audio and text.
+### 1. MARS5 TTS CLI
 
-## Features
+A command-line interface for MARS5-TTS (Multilingual Adaptive Refined Synthesis) that allows you to synthesize speech that mimics a reference voice.
 
-- Voice cloning from a reference audio sample
-- Deep cloning option when reference transcript is provided
-- Customizable synthesis parameters
-- Support for both safetensors and PyTorch checkpoint formats
+- **Key Features**: Voice cloning, deep cloning, customizable synthesis parameters
+- **File**: `mars5_tts_cli.py`
+- **Documentation**: [README_MARS5_TTS.md](README_MARS5_TTS.md)
 
-## Installation
+### 2. MARS5 Video Dubber
 
-1. use Linux or WSL
-2. Clone this repository
-3. Install the required dependencies:
+A tool for dubbing videos into English using Whisper for transcription/translation and MARS5-TTS for high-quality voice synthesis.
 
-```bash
-pip install -r requirements.txt
-```
+- **Key Features**: Voice cloning, translation, deep cloning, timing preservation
+- **File**: `mars5_video_dubber.py`
+- **Documentation**: [README_MARS5_VIDEO_DUBBER.md](README_MARS5_VIDEO_DUBBER.md)
 
-## Usage
+### 3. Coqui Video Dubber
 
-Basic usage:
+A powerful tool for dubbing videos into English using Whisper for transcription/translation, Demucs for music extraction, and Coqui.ai TTS for high-quality speech synthesis.
 
-```bash
-python main.py --ref_audio <reference_audio.wav> --text "Text to synthesize" --output output.wav
-```
+- **Key Features**: Music preservation, voice customization, translation, GPU acceleration
+- **File**: `coqui_video_dubber.py`
+- **Documentation**: [README_COQUI_DUBBER.md](README_COQUI_DUBBER.md)
 
-Deep cloning (requires reference transcript):
+## Quick Start
 
-```bash
-python main.py --ref_audio <reference_audio.wav> --ref_transcript "Transcript of the reference audio" --text "Text to synthesize" --deep_clone --output output_deep.wav
-```
-
-### Example
+### MARS5 TTS CLI
 
 ```bash
-python main.py --ref_audio eg9_ref.wav --ref_transcript "The long pepper is less aromatic than the black, but its oil is more pungent." --text "Then the wizard said softly, don't make a sound." --deep_clone --output output_deep.wav
+python mars5_tts_cli.py --ref_audio reference.wav --text "Text to synthesize" --output output.wav
 ```
 
-### Command-line Arguments
+### MARS5 Video Dubber
 
-- `--ref_audio`: Path to reference WAV file (1-12s, 24kHz)
-- `--ref_transcript`: Transcript of reference audio (required for deep clone)
-- `--text`: Text to synthesize
-- `--deep_clone`: Enable deep cloning mode (requires reference transcript)
-- `--output`: Output WAV filename (default: output.wav)
-- `--ckpt_format`: Checkpoint format to load: safetensors or pt (default: safetensors)
+```bash
+python mars5_video_dubber.py --video input.mp4 --ref_audio reference.wav --output dubbed.mp4
+```
+
+### Coqui Video Dubber
+
+```bash
+python coqui_video_dubber.py --video input.mp4 --output dubbed.mp4
+```
 
 ## Requirements
 
-- Python 3.6+
-- PyTorch
-- torchaudio
-- librosa
-- vocos
-- encodec
-- safetensors
-- regex
-- soundfile
-
-## License
-
-Please refer to the Cambridge AI license for MARS5-TTS.
+Each tool has its own specific requirements. Please refer to the individual README files for detailed installation instructions.
 
 ## Acknowledgements
 
-This CLI tool is built on top of the MARS5-TTS model developed by Cambridge AI.
+These tools combine various AI technologies:
+
+- Camb.AI's MARS5-TTS
+- OpenAI's Whisper
+- Coqui.ai's TTS
+- Facebook's Demucs
