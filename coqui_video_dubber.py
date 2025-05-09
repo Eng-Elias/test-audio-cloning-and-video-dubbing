@@ -2,9 +2,10 @@
 """
 Video dubbing script using Whisper for transcription and Coqui.ai TTS for speech synthesis.
 
-This script takes a video file, extracts the audio, transcribes it using Whisper,
-translates to English if needed, and then synthesizes new speech using Coqui.ai TTS.
-Finally, it merges the new audio with the original video.
+This script takes a video file, extracts the audio, applies preprocessing for noise reduction,
+transcribes it using Whisper, translates to English if needed, and then synthesizes new speech
+using Coqui.ai TTS. It also extracts and preserves the original music track when possible.
+Finally, it merges the new speech and preserved music with the original video.
 
 Prerequisites:
     pip install -r requirements_coqui.txt
@@ -12,12 +13,16 @@ Prerequisites:
 import argparse
 import os
 import tempfile
+import subprocess
 import torch
 import numpy as np
 import whisper
+import librosa
+import noisereduce as nr
 from TTS.api import TTS
-from moviepy.editor import VideoFileClip, AudioFileClip
+from moviepy.editor import VideoFileClip, AudioFileClip, CompositeAudioClip
 import soundfile as sf
+from scipy.signal import butter, filtfilt
 
 
 def extract_audio(video_path, output_path=None):
@@ -27,10 +32,119 @@ def extract_audio(video_path, output_path=None):
     
     print(f"Extracting audio from {video_path}...")
     video = VideoFileClip(video_path)
-    video.audio.write_audiofile(output_path, codec='pcm_s16le', ffmpeg_params=["-ac", "1"])
+    # Extract stereo audio if available (for better music separation)
+    video.audio.write_audiofile(output_path, codec='pcm_s16le')
     video.close()
     
     return output_path
+
+
+def apply_noise_reduction(audio_path, output_path=None):
+    """Apply noise reduction to improve transcription accuracy."""
+    if output_path is None:
+        base, ext = os.path.splitext(audio_path)
+        output_path = f"{base}_cleaned{ext}"
+    
+    print("Applying noise reduction...")
+    # Load audio
+    y, sr = librosa.load(audio_path, sr=None)
+    
+    # Estimate noise profile from a presumably non-speech portion (first 2 seconds)
+    noise_sample = y[:min(len(y), int(2 * sr))]
+    
+    # Apply noise reduction
+    reduced_noise = nr.reduce_noise(
+        y=y,
+        sr=sr,
+        stationary=True,
+        prop_decrease=0.75,
+        n_std_thresh_stationary=1.5
+    )
+    
+    # Apply a high-pass filter to remove low-frequency rumble
+    def butter_highpass(cutoff, fs, order=5):
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+        b, a = butter(order, normal_cutoff, btype='high', analog=False)
+        return b, a
+    
+    b, a = butter_highpass(cutoff=80, fs=sr, order=4)
+    filtered_audio = filtfilt(b, a, reduced_noise)
+    
+    # Save the processed audio
+    sf.write(output_path, filtered_audio, sr)
+    print(f"Noise-reduced audio saved to {output_path}")
+    
+    return output_path
+
+
+def extract_music(audio_path, output_path=None):
+    """Extract music from the audio using Spleeter."""
+    if output_path is None:
+        base_dir = os.path.dirname(audio_path)
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+        output_path = os.path.join(base_dir, f"{base_name}_music.wav")
+    
+    # Create a directory for Spleeter output
+    output_dir = os.path.join(os.path.dirname(output_path), "spleeter_output")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print("Extracting music from audio using Spleeter...")
+    try:
+        # Use Spleeter to separate vocals and accompaniment
+        from spleeter.separator import Separator
+        
+        # Initialize the separator with the 2stems model
+        separator = Separator('spleeter:2stems')
+        
+        # Perform the separation
+        separator.separate_to_file(
+            audio_path,
+            output_dir,
+            filename_format='{instrument}.{codec}'
+        )
+        
+        # Path to the accompaniment file
+        accompaniment_path = os.path.join(output_dir, "accompaniment.wav")
+        
+        # Copy the accompaniment to the output path
+        if os.path.exists(accompaniment_path):
+            # Load and save with the correct sample rate
+            music, sr = librosa.load(accompaniment_path, sr=None)
+            sf.write(output_path, music, sr)
+            print(f"Music track extracted to {output_path}")
+            return output_path
+        else:
+            print("Failed to extract music: accompaniment file not found")
+            return None
+    except Exception as e:
+        print(f"Error extracting music: {e}")
+        # Fallback method: try to extract music using a simple high-pass filter
+        try:
+            print("Falling back to simple frequency filtering for music extraction...")
+            y, sr = librosa.load(audio_path, sr=None)
+            
+            # Apply a band-pass filter to focus on typical music frequencies
+            def butter_bandpass(lowcut, highcut, fs, order=5):
+                nyq = 0.5 * fs
+                low = lowcut / nyq
+                high = highcut / nyq
+                b, a = butter(order, [low, high], btype='band')
+                return b, a
+            
+            # Music often has more energy in 60-10000 Hz range
+            b, a = butter_bandpass(lowcut=60, highcut=10000, fs=sr, order=4)
+            music = filtfilt(b, a, y)
+            
+            # Reduce the volume to blend better
+            music = music * 0.3
+            
+            sf.write(output_path, music, sr)
+            print(f"Basic music extraction saved to {output_path}")
+            return output_path
+        except Exception as e2:
+            print(f"Fallback music extraction also failed: {e2}")
+            return None
 
 
 def transcribe_audio(audio_path, model_size="base", task="transcribe", language=None):
@@ -139,12 +253,61 @@ def create_dubbed_audio(segments, tts, total_duration, sample_rate, temp_dir, sp
     return output_path
 
 
-def merge_audio_with_video(video_path, audio_path, output_path):
-    """Merge the dubbed audio with the original video."""
-    print(f"Merging dubbed audio with original video...")
+def mix_audio_tracks(speech_path, music_path, output_path, speech_volume=1.0, music_volume=0.3):
+    """Mix speech and music audio tracks with volume control."""
+    print(f"Mixing speech and music tracks...")
+    
+    # Load audio files
+    speech, speech_sr = librosa.load(speech_path, sr=None)
+    music, music_sr = librosa.load(music_path, sr=None)
+    
+    # Resample music to match speech sample rate if needed
+    if music_sr != speech_sr:
+        music = librosa.resample(music, orig_sr=music_sr, target_sr=speech_sr)
+    
+    # Adjust lengths to match
+    if len(music) > len(speech):
+        music = music[:len(speech)]
+    elif len(music) < len(speech):
+        # Pad music with zeros to match speech length
+        padding = np.zeros(len(speech) - len(music))
+        music = np.concatenate([music, padding])
+    
+    # Apply volume adjustments
+    speech = speech * speech_volume
+    music = music * music_volume
+    
+    # Mix the tracks
+    mixed = speech + music
+    
+    # Normalize to prevent clipping
+    max_val = np.max(np.abs(mixed))
+    if max_val > 1.0:
+        mixed = mixed / max_val * 0.9  # Leave some headroom
+    
+    # Save the mixed audio
+    sf.write(output_path, mixed, speech_sr)
+    print(f"Mixed audio saved to {output_path}")
+    
+    return output_path
+
+
+def merge_audio_with_video(video_path, speech_path, output_path, music_path=None, speech_volume=1.0, music_volume=0.3):
+    """Merge the dubbed speech and optional music with the original video."""
+    print(f"Merging audio with original video...")
     
     video = VideoFileClip(video_path)
-    audio = AudioFileClip(audio_path)
+    
+    if music_path and os.path.exists(music_path):
+        # If we have a music track, mix it with the speech
+        print("Using extracted music track")
+        mixed_path = os.path.join(os.path.dirname(speech_path), "mixed_audio.wav")
+        mix_audio_tracks(speech_path, music_path, mixed_path, speech_volume, music_volume)
+        audio = AudioFileClip(mixed_path)
+    else:
+        # Otherwise just use the speech track
+        print("No music track available, using speech only")
+        audio = AudioFileClip(speech_path)
     
     # Set the audio of the video clip
     video = video.set_audio(audio)
@@ -226,7 +389,7 @@ def main():
         help='Output video filename. If not specified, will use input_dubbed.mp4'
     )
     parser.add_argument(
-        '--whisper_model', type=str, choices=['tiny', 'base', 'small', 'medium', 'large'], default='base',
+        '--whisper_model', type=str, choices=['tiny', 'base', 'small', 'medium', 'large'], default='medium',
         help='Whisper model size to use for transcription.'
     )
     parser.add_argument(
@@ -252,6 +415,22 @@ def main():
     parser.add_argument(
         '--cpu', action='store_true',
         help='Force CPU usage for TTS (default: use GPU if available).'
+    )
+    parser.add_argument(
+        '--no_noise_reduction', action='store_true',
+        help='Skip noise reduction preprocessing step.'
+    )
+    parser.add_argument(
+        '--no_music_extraction', action='store_true',
+        help='Skip music extraction and preservation.'
+    )
+    parser.add_argument(
+        '--speech_volume', type=float, default=1.0,
+        help='Volume level for speech in the final mix (0.0-1.5).'
+    )
+    parser.add_argument(
+        '--music_volume', type=float, default=0.3,
+        help='Volume level for music in the final mix (0.0-1.0).'
     )
     parser.add_argument(
         '--keep_temp_files', action='store_true',
@@ -299,9 +478,28 @@ def main():
         # Extract audio from video
         extracted_audio = extract_audio(args.video, os.path.join(temp_dir, "extracted_audio.wav"))
         
+        # Extract music track if requested
+        music_path = None
+        if not args.no_music_extraction:
+            try:
+                music_path = extract_music(extracted_audio, os.path.join(temp_dir, "music.wav"))
+                print(f"Music extraction {'succeeded' if music_path else 'failed'}")
+            except Exception as e:
+                print(f"Music extraction error: {e}")
+                music_path = None
+        
+        # Apply noise reduction for better transcription if requested
+        transcription_audio = extracted_audio
+        if not args.no_noise_reduction:
+            try:
+                cleaned_audio = apply_noise_reduction(extracted_audio, os.path.join(temp_dir, "cleaned_audio.wav"))
+                transcription_audio = cleaned_audio
+            except Exception as e:
+                print(f"Noise reduction error: {e}")
+        
         # Transcribe and translate audio
         task = "translate" if args.translate else "transcribe"
-        segments = transcribe_audio(extracted_audio, args.whisper_model, task, args.source_language)
+        segments = transcribe_audio(transcription_audio, args.whisper_model, task, args.source_language)
         
         # Get video duration for full audio synthesis
         video = VideoFileClip(args.video)
@@ -322,7 +520,7 @@ def main():
         )
         
         # Create dubbed audio
-        dubbed_audio = create_dubbed_audio(
+        dubbed_speech = create_dubbed_audio(
             segments, 
             tts, 
             duration, 
@@ -332,14 +530,26 @@ def main():
             language=args.language
         )
         
-        # Merge dubbed audio with original video
-        output_video = merge_audio_with_video(args.video, dubbed_audio, args.output)
+        # Merge dubbed speech with original video and music if available
+        output_video = merge_audio_with_video(
+            args.video, 
+            dubbed_speech, 
+            args.output, 
+            music_path=music_path,
+            speech_volume=args.speech_volume,
+            music_volume=args.music_volume
+        )
         
         print(f"Dubbed video saved to {output_video}")
         
         # Clean up if needed
-        if not args.keep_temp_files and os.path.exists(extracted_audio):
-            os.remove(extracted_audio)
+        if not args.keep_temp_files:
+            temp_files = [f for f in [extracted_audio, transcription_audio, music_path, dubbed_speech] if f and os.path.exists(f)]
+            for file in temp_files:
+                try:
+                    os.remove(file)
+                except:
+                    pass
 
 
 if __name__ == '__main__':
