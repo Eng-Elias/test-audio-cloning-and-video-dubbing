@@ -38,19 +38,19 @@ pip install -r requirements.txt
 Basic usage:
 
 ```bash
-python video_dubber.py --video input_video.mp4 --ref_audio voice_reference.wav --output dubbed_video.mp4
+python mars5_video_dubber.py --video input_video.mp4 --ref_audio voice_reference.wav --output dubbed_video.mp4
 ```
 
 With translation from another language:
 
 ```bash
-python video_dubber.py --video french_video.mp4 --ref_audio voice_reference.wav --translate --output french_video_english.mp4
+python mars5_video_dubber.py --video french_video.mp4 --ref_audio voice_reference.wav --translate --output french_video_english.mp4
 ```
 
 With deep voice cloning:
 
 ```bash
-python video_dubber.py --video input_video.mp4 --ref_audio voice_reference.wav --ref_transcript "This is the transcript of the reference audio." --deep_clone --output dubbed_video_deep.mp4
+python mars5_video_dubber.py --video input_video.mp4 --ref_audio voice_reference.wav --ref_transcript "This is the transcript of the reference audio." --deep_clone --output dubbed_video_deep.mp4
 ```
 
 ### Command-line Arguments
