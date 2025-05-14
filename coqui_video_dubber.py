@@ -39,6 +39,107 @@ def extract_audio(video_path, output_path=None):
     return output_path
 
 
+def extract_voice_sample(audio_path, output_path=None, duration=10.0):
+    """Extract a clean voice sample from the input audio for voice cloning."""
+    if output_path is None:
+        base_dir = os.path.dirname(audio_path)
+        base_name = os.path.splitext(os.path.basename(audio_path))[0]
+        output_path = os.path.join(base_dir, f"{base_name}_voice_sample.wav")
+    
+    print(f"Extracting voice sample for cloning from {audio_path}...")
+    
+    # Load the audio file
+    y, sr = librosa.load(audio_path, sr=None)
+    
+    # Apply noise reduction to get cleaner voice
+    y_reduced = nr.reduce_noise(
+        y=y,
+        sr=sr,
+        stationary=True,
+        prop_decrease=0.75
+    )
+    
+    # Detect speech segments using energy-based VAD
+    def detect_speech_segments(audio, sr, frame_length=1024, hop_length=512, threshold=0.05):
+        # Compute the RMS energy
+        energy = librosa.feature.rms(y=audio, frame_length=frame_length, hop_length=hop_length)[0]
+        
+        # Find segments with energy above threshold
+        speech_frames = np.where(energy > threshold)[0]
+        
+        if len(speech_frames) == 0:
+            return []
+        
+        # Group consecutive frames
+        speech_segments = []
+        start_frame = speech_frames[0]
+        prev_frame = speech_frames[0]
+        
+        for frame in speech_frames[1:]:
+            if frame > prev_frame + 1:  # Non-consecutive frame
+                # Convert frames to time
+                start_time = start_frame * hop_length / sr
+                end_time = prev_frame * hop_length / sr
+                speech_segments.append((start_time, end_time))
+                start_frame = frame
+            prev_frame = frame
+        
+        # Add the last segment
+        start_time = start_frame * hop_length / sr
+        end_time = prev_frame * hop_length / sr
+        speech_segments.append((start_time, end_time))
+        
+        return speech_segments
+    
+    # Find speech segments
+    speech_segments = detect_speech_segments(y_reduced, sr)
+    
+    # Sort segments by duration (descending)
+    speech_segments.sort(key=lambda x: x[1] - x[0], reverse=True)
+    
+    # Collect multiple speech segments to get a better voice sample
+    voice_samples = []
+    total_duration = 0
+    target_duration = min(duration, 20.0)  # Aim for up to 20 seconds of good speech
+    
+    for start_time, end_time in speech_segments:
+        segment_duration = end_time - start_time
+        if segment_duration < 0.5:  # Skip very short segments
+            continue
+            
+        # Convert time to samples
+        start_sample = int(start_time * sr)
+        end_sample = int(end_time * sr)
+        
+        # Extract the segment
+        segment = y_reduced[start_sample:end_sample]
+        voice_samples.append(segment)
+        
+        total_duration += segment_duration
+        if total_duration >= target_duration:
+            break
+    
+    if voice_samples:
+        # Concatenate all collected segments
+        voice_sample = np.concatenate(voice_samples)
+        
+        # Normalize the audio
+        max_val = np.max(np.abs(voice_sample))
+        if max_val > 0:
+            voice_sample = voice_sample / max_val * 0.9
+        
+        # Save the voice sample
+        sf.write(output_path, voice_sample, sr)
+        print(f"Enhanced voice sample extracted to {output_path} (duration: {total_duration:.2f}s)")
+        return output_path
+    else:
+        print("No clear speech segments found. Using the first 10 seconds of audio.")
+        # Use the first portion of audio as fallback
+        max_samples = min(int(duration * sr), len(y_reduced))
+        sf.write(output_path, y_reduced[:max_samples], sr)
+        return output_path
+
+
 def apply_noise_reduction(audio_path, output_path=None):
     """Apply noise reduction to improve transcription accuracy."""
     if output_path is None:
@@ -354,8 +455,8 @@ def transcribe_audio(audio_path, model_size="base", task="transcribe", language=
     return result["segments"]
 
 
-def initialize_tts(model_name, gpu=True):
-    """Initialize Coqui TTS model."""
+def initialize_tts(model_name, gpu=True, reference_wav=None, reference_speaker_lang=None):
+    """Initialize Coqui TTS model with optional voice cloning support."""
     print(f"Initializing Coqui TTS model: {model_name}")
     
     # Set device based on availability and user preference
@@ -365,25 +466,97 @@ def initialize_tts(model_name, gpu=True):
     # Initialize TTS
     tts = TTS(model_name=model_name, progress_bar=True, gpu=gpu)
     
+    # Store reference audio info for YourTTS voice cloning if provided
+    tts.reference_wav = reference_wav
+    tts.reference_speaker_lang = reference_speaker_lang
+    
+    # Print available speakers and languages for the model
+    if hasattr(tts, 'speakers') and tts.speakers:
+        print(f"Available speakers: {', '.join(tts.speakers[:5])}{'...' if len(tts.speakers) > 5 else ''}")
+    
+    if hasattr(tts, 'languages') and tts.languages:
+        print(f"Available languages: {', '.join(tts.languages[:5])}{'...' if len(tts.languages) > 5 else ''}")
+    
     return tts
 
 
 def synthesize_speech(tts, text, output_path, speaker=None, language=None):
-    """Synthesize speech using Coqui TTS."""
+    """Synthesize speech using Coqui TTS with optional voice cloning."""
     print(f"Synthesizing: {text[:50]}..." if len(text) > 50 else f"Synthesizing: {text}")
     
     # Handle different model types (some require speaker or language)
     kwargs = {}
+    
+    # YourTTS requires a speaker even when using voice cloning
+    if 'your_tts' in tts.model_name:
+        # If no speaker is provided, use a default speaker
+        if speaker is None:
+            # Get the first available speaker for YourTTS
+            if hasattr(tts, 'speakers') and tts.speakers:
+                # Use the first speaker in the list
+                speaker = tts.speakers[0]
+                print(f"Using default speaker: {speaker}")
+            else:
+                # Fallback to a known speaker in YourTTS (female-en-5 is usually available)
+                speaker = "female-en-5"
+                print(f"Using fallback speaker: {speaker}")
+    
     if speaker is not None:
         kwargs["speaker"] = speaker
+    
+    # Handle language parameter
+    if 'your_tts' in tts.model_name:
+        # For YourTTS, make sure we have a valid language
+        if language is None and hasattr(tts, 'languages') and tts.languages:
+            # Default to English if available, otherwise use the first language
+            if 'en' in tts.languages:
+                language = 'en'
+            else:
+                language = tts.languages[0]
+            print(f"Using default language: {language}")
+    
     if language is not None:
         kwargs["language"] = language
+    
+    # Add voice cloning parameters if using YourTTS and reference audio is available
+    if hasattr(tts, 'reference_wav') and tts.reference_wav and 'your_tts' in tts.model_name:
+        print(f"Using voice cloning with reference audio: {tts.reference_wav}")
+        kwargs["speaker_wav"] = tts.reference_wav  # Use speaker_wav instead of reference_wav
+        
+        # If reference speaker language is provided, use it for the input language
+        if hasattr(tts, 'reference_speaker_lang') and tts.reference_speaker_lang:
+            print(f"Using reference speaker language: {tts.reference_speaker_lang}")
+            # Note: We don't override the output language here anymore
+        
+        # Add parameters to improve voice cloning quality and speech rate
+        if hasattr(tts, 'model_name') and 'your_tts' in tts.model_name:
+            # Adjust speech rate (0.8 = 20% slower than normal)
+            kwargs["speed"] = 0.8
+            
+            # Increase speaker similarity weight (if supported)
+            # This makes the output voice more similar to the reference
+            if hasattr(tts, 'synthesizer') and hasattr(tts.synthesizer, 'voice_similarity'):
+                tts.synthesizer.voice_similarity = 1.0
+    
+    # Print the final parameters being used
+    print(f"TTS parameters: {kwargs}")
     
     # Synthesize speech
     tts.tts_to_file(text=text, file_path=output_path, **kwargs)
     
     # Get audio data and sample rate
     audio, sample_rate = sf.read(output_path)
+    
+    # Apply additional post-processing to adjust speed if needed
+    if hasattr(tts, 'reference_wav') and tts.reference_wav and 'your_tts' in tts.model_name:
+        # Check if the speech is still too fast
+        if len(audio) / sample_rate < len(text) * 0.05:  # Rough estimate of expected duration
+            print("Speech seems too fast, applying additional time stretching...")
+            # Use librosa to stretch the audio without changing pitch
+            import librosa
+            audio_stretched = librosa.effects.time_stretch(audio, rate=0.85)  # Stretch by 15%
+            sf.write(output_path, audio_stretched, sample_rate)
+            audio = audio_stretched
     
     return audio, sample_rate
 
@@ -703,7 +876,10 @@ def main():
         help='Source language code (e.g., "fr" for French). If not specified, Whisper will auto-detect.'
     )
     parser.add_argument(
-        '--tts_model', type=str, default="tts_models/en/ljspeech/tacotron2-DDC",
+        '--tts_model', type=str,
+        # default="tts_models/en/ljspeech/tacotron2-DDC",
+        # default="tts_models/multilingual/multi-dataset/your_tts",
+        default="tts_models/multilingual/multi-dataset/xtts_v2",
         help='Coqui TTS model to use for speech synthesis.'
     )
     parser.add_argument(
@@ -713,6 +889,22 @@ def main():
     parser.add_argument(
         '--language', type=str, default=None,
         help='Language ID for multi-language TTS models.'
+    )
+    parser.add_argument(
+        '--target_language', type=str, default='en',
+        help='Target language code for translation (e.g., "en" for English).'
+    )
+    parser.add_argument(
+        '--clone_voice', action='store_true',
+        help='Clone the voice from the input video to the output language using YourTTS.'
+    )
+    parser.add_argument(
+        '--voice_sample_duration', type=float, default=20.0,
+        help='Duration in seconds of the voice sample to extract for cloning (default: 20.0).'
+    )
+    parser.add_argument(
+        '--speech_rate', type=float, default=0.8,
+        help='Speech rate for voice cloning (0.8 = 20% slower, 1.0 = normal, 1.2 = 20% faster).'
     )
     parser.add_argument(
         '--cpu', action='store_true',
@@ -801,15 +993,66 @@ def main():
         
         # Transcribe and translate audio
         task = "translate" if args.translate else "transcribe"
+        target_language = args.target_language if args.translate else None
         segments = transcribe_audio(transcription_audio, args.whisper_model, task, args.source_language)
+        
+        # If voice cloning is enabled, set the language for synthesis to the target language
+        if args.clone_voice and args.translate:
+            args.language = args.target_language
+            
+            # If no speaker is specified and we're using voice cloning, set a default speaker
+            # We'll let the synthesize_speech function handle selecting an appropriate speaker
         
         # Get video duration for full audio synthesis
         video = VideoFileClip(args.video)
         duration = video.duration
         video.close()
         
+        # Handle voice cloning if requested
+        reference_wav = None
+        reference_speaker_lang = None
+        
+        if args.clone_voice:
+            # Override TTS model to use YourTTS for voice cloning
+            if 'your_tts' not in args.tts_model or 'xtts_v2' not in args.tts_model:
+                print("Voice cloning requested, switching to YourTTS model")
+                args.tts_model = "tts_models/multilingual/multi-dataset/your_tts"
+            
+            # Extract a voice sample from the input video
+            try:
+                print("Extracting voice sample for cloning...")
+                reference_wav = extract_voice_sample(
+                    extracted_audio, 
+                    os.path.join(temp_dir, "voice_sample.wav"),
+                    duration=args.voice_sample_duration
+                )
+                
+                # Set the reference speaker language based on source language or auto-detected language
+                if args.source_language:
+                    reference_speaker_lang = args.source_language
+                else:
+                    # Auto-detect the language using Whisper
+                    print("Auto-detecting source language for voice cloning...")
+                    audio = whisper.load_audio(reference_wav)
+                    audio = whisper.pad_or_trim(audio)
+
+                    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    mel = whisper.log_mel_spectrogram(audio).to(device)
+                    _, probs = whisper.detect_language(whisper.model, mel)
+                    detected_lang = max(probs, key=probs.get)
+                    print(f"Detected language: {detected_lang} (confidence: {probs[detected_lang]:.2f})")
+                    reference_speaker_lang = detected_lang
+            except Exception as e:
+                print(f"Error extracting voice sample: {e}")
+                print("Continuing without voice cloning")
+        
         # Initialize TTS
-        tts = initialize_tts(args.tts_model, not args.cpu)
+        tts = initialize_tts(
+            args.tts_model, 
+            not args.cpu,
+            reference_wav=reference_wav,
+            reference_speaker_lang=reference_speaker_lang
+        )
         
         # Get sample rate from a test synthesis
         test_path = os.path.join(temp_dir, "test.wav")

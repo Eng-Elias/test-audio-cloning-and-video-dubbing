@@ -1,6 +1,6 @@
 # Coqui Video Dubber
 
-A powerful tool for dubbing videos into English using Whisper for transcription/translation, Demucs for music extraction, and Coqui.ai TTS for high-quality speech synthesis.
+A powerful tool for dubbing videos into English using Whisper for transcription/translation, Demucs for music extraction, and Coqui.ai TTS for high-quality speech synthesis with voice cloning capabilities.
 
 ## Overview
 
@@ -19,6 +19,7 @@ This tool is optimized for NVIDIA GPUs, including the RTX 2060, providing effici
 - Transcribe audio in multiple languages using Whisper
 - Translate non-English audio to English
 - Synthesize English speech with Coqui.ai TTS
+- **Voice cloning from input video to output language using YourTTS**
 - Support for multiple TTS models, speakers, and languages
 - Preserve timing of original speech segments
 - GPU acceleration for faster processing
@@ -50,6 +51,12 @@ python coqui_video_dubber.py --video input_video.mp4 --output dubbed_video.mp4
 
 ```bash
 python coqui_video_dubber.py --video french_video.mp4 --translate --output french_video_english.mp4
+```
+
+### With Voice Cloning (Keep the Original Voice in the Target Language)
+
+```bash
+python coqui_video_dubber.py --video arabic_video.mp4 --translate --clone_voice --output arabic_video_english_same_voice.mp4
 ```
 
 ### Using a Specific TTS Model and Speaker
@@ -91,6 +98,9 @@ python coqui_video_dubber.py --list_languages tts_models/multilingual/multi-data
 - `--tts_model`: Coqui TTS model to use (default: tts_models/en/ljspeech/tacotron2-DDC)
 - `--speaker`: Speaker ID for multi-speaker TTS models
 - `--language`: Language ID for multi-language TTS models
+- `--target_language`: Target language code for translation (default: en)
+- `--clone_voice`: Clone the voice from the input video to the output language using YourTTS
+- `--voice_sample_duration`: Duration in seconds of the voice sample to extract for cloning (default: 10.0)
 - `--cpu`: Force CPU usage for TTS (default: use GPU if available)
 
 ### Audio Mixing Options
